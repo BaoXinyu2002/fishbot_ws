@@ -20,7 +20,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            "nav_to_pose=fishbot_application.nav_to_pose:main"
+            "nav_to_pose=fishbot_application.runner:main"
         ],
     },
 )

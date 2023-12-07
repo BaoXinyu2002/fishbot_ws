@@ -37,8 +37,9 @@ ament_target_dependencies(fishbot_bringup
 )
 install(TARGETS fishbot_bringup
   DESTINATION lib/${PROJECT_NAME})
-install(
-  DIRECTORY launch  
+install(DIRECTORY
+  launch
+  param
   DESTINATION share/${PROJECT_NAME}
 )
 

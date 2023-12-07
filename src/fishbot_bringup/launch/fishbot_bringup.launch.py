@@ -16,6 +16,7 @@ def generate_launch_description():
     robot_state_publisher_node = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
+        # namespace='ff0',
         arguments=[urdf_model_path]
     )
 
@@ -23,6 +24,7 @@ def generate_launch_description():
         package='joint_state_publisher',
         executable='joint_state_publisher',
         name='joint_state_publisher',
+        # namespace='ff0',
         arguments=[urdf_model_path],
         output='screen',
     )
@@ -31,6 +33,7 @@ def generate_launch_description():
         package='fishbot_bringup',
         executable='fishbot_bringup',
         name='fishbot_bringup',
+        # namespace='ff0',
         output='screen',
     )
 
