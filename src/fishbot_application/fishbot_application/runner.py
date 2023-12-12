@@ -1,117 +1,73 @@
 # from laser_tracker import *
 import rclpy
 from rclpy.node import Node
+from rclpy.duration import Duration
 # from geometry_msgs.msg import Twist, Pose, Point
 # from nav_msgs.msg import Odometry
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Point
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 
 from enum import Enum
 
 import sys
-import argparse
 import cv2
 import numpy as np
 import pyrealsense2 as rs
 import time
 
+# import socket
+
+# class MySocketClass:
+#     def __init__(self, recv_port, send_port, my_ip, other_ip):
+#         # host = socket.gethostname()
+#         # # 创建接收用的socket
+#         # self.recv_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#         # self.recv_socket.bind(("35.3.33.37", recv_port))
+#         # self.recv_socket.listen(1)
+
+#         # print("wait for sockets")
+#         # time.sleep(5)
+
+#         # 创建发送用的socket
+#         self.send_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#         self.send_socket.connect(("35.3.202.217", send_port))
+
+#     def send_data(self, data):
+#         # 发送数据
+#         self.send_socket.sendall(data.encode())
+
+#     def receive_data(self):
+#         # 接收数据
+#         connection, address = self.recv_socket.accept()
+#         data = connection.recv(1024)
+#         connection.close()
+#         return data.decode()
+
 class LaserTracker():
-    def __init__(self, hsv_thres, color, cam_width, cam_height, xpos=0, ypos=0):
-        self.cam_width = cam_width
-        self.cam_height = cam_height
-        self.xpos = xpos
-        self.ypos = ypos
-
-        self.tracker_height = 0.125
-        self.horizontal_range = 69 * np.pi / 180
-
-        self.hue_min = hsv_thres["hue_min"]
-        self.hue_max = hsv_thres["hue_max"]
-        self.sat_min = hsv_thres["sat_min"]
-        self.sat_max = hsv_thres["sat_max"]
-        self.val_min = hsv_thres["val_min"]
-        self.val_max = hsv_thres["val_max"]
+    def __init__(self, hls_thres:dict, color):
+        self.hue_min = hls_thres["hue_min"]
+        self.hue_max = hls_thres["hue_max"]
+        self.sat_min = hls_thres["sat_min"]
+        self.sat_max = hls_thres["sat_max"]
+        self.l_min = hls_thres["l_min"]
+        self.l_max = hls_thres["l_max"]
         self.color = color
 
         self.previous_position = None
-        self.trail = np.zeros((self.cam_height, self.cam_width, 3),
-                                 np.uint8)
-        self.centers = [] # center[0]: width  center[1]: height
-    
-    def create_and_position_window(self, name, xpos, ypos):
-        """Creates a named widow placing it on the screen at (xpos, ypos)."""
-        # Create a window
-        cv2.namedWindow(name)
-        # Resize it to the size of the camera image
-        cv2.resizeWindow(name, self.cam_width, self.cam_height)
-        # Move to (xpos,ypos) on the screen
-        cv2.moveWindow(name, xpos, ypos)
-
-    def display(self, thres, frame):
-        """Display the combined image and (optionally) all other image channels
-        NOTE: default color space in OpenCV is BGR.
-        """
-        cv2.imshow("RGB_VideoFrame "+self.color, frame)
-        cv2.imshow("LaserPointer "+self.color, thres)
-
-    def setup_windows(self):
-        sys.stdout.write("Using OpenCV version: {0}\n".format(cv2.__version__))
-
-        # create output windows
-        self.create_and_position_window("LaserPointer "+self.color, self.xpos, self.ypos)
-        self.create_and_position_window("RGB_VideoFrame "+self.color,
-                                        self.xpos + 10 + self.cam_width, self.ypos)
+        self.centers = [] # center[0]->width  center[1]->height
+        self.prev_len = 0
+        self.curr_len = 0
+        # self.center_cnt = 0
+        self.last_time = 0
 
     def clear_trail(self):
-        self.trail = np.zeros((self.cam_height, self.cam_width, 3), np.uint8)
         self.centers = []
         self.previous_position = None
 
-    def track(self, frame, mask):
-        """
-        Track the position of the laser pointer.
-
-        Code taken from
-        http://www.pyimagesearch.com/2015/09/14/ball-tracking-with-opencv/
-        """
-        center = None
-
-        countours = cv2.findContours(mask, cv2.RETR_EXTERNAL,
-                                     cv2.CHAIN_APPROX_SIMPLE)[-2]
-
-        # only proceed if at least one contour was found
-        if len(countours) > 0:
-            # find the largest contour in the mask, then use
-            # it to compute the minimum enclosing circle and
-            # centroid
-            c = max(countours, key=cv2.contourArea)
-            # c = min(countours, key=cv2.contourArea)
-            ((x, y), radius) = cv2.minEnclosingCircle(c)
-            moments = cv2.moments(c)
-            if moments["m00"] > 0:
-                center = int(moments["m10"] / moments["m00"]), \
-                         int(moments["m01"] / moments["m00"])
-            else:
-                center = int(x), int(y)
-
-            # only proceed if the radius meets a minimum size
-            # if radius > 10:
-            if radius > 10:
-                # draw the circle and centroid on the frame,
-                cv2.circle(frame, (int(x), int(y)), int(radius),
-                           (0, 255, 255), 2)
-                cv2.circle(frame, center, 5, (0, 0, 255), -1)
-                # then update the ponter trail
-                if self.previous_position:
-                    cv2.line(self.trail, self.previous_position, center,
-                             (255, 255, 255), 2)
-
-        cv2.add(self.trail, frame, frame)
-        self.previous_position = center
-        if center:
-            self.centers.append([center[0], center[1]])
-
-    def find_blob(self, frame, mask):
+    def find_blob(self, frame, mask, mask_with_color):
         """Use blob detector to find laser point"""
         # Create the detector with the parameters
         detector = cv2.SimpleBlobDetector.create()
@@ -122,86 +78,83 @@ class LaserTracker():
         # params.blobColor = 255
 
         # Set Circularity filtering parameters 
-        params.filterByCircularity = True 
-        params.minCircularity = 0.6
+        params.filterByCircularity = False
+        params.minCircularity = 0.5
         
         # Set Convexity filtering parameters 
-        params.filterByConvexity = True
-        params.minConvexity = 0.2
+        params.filterByConvexity = False
+        params.minConvexity = 0.8
 
         # Set inertia filtering parameters 
-        params.filterByInertia = True
-        params.minInertiaRatio = 0.01
+        params.filterByInertia = False
+        params.minInertiaRatio = 0.8
 
         # Filter by Area
-        params.filterByArea = False
-        params.maxArea = 200
+        params.filterByArea = True
+        params.minArea = 5
 
         detector.setParams(params)
         
         # Detect blobs 
         keypoints = detector.detect(mask)
-        
-        print(len(keypoints))
-        # if len(keypoints) and len(keypoints) <= 2:
-            # print(keypoints)
-            # print(len(keypoints))
-        # max_y = 0
-        center_x = 0
-        center_y = 0
+
+        color_contours, _ = cv2.findContours(mask_with_color, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # cv2.drawContours(frame, color_contours, -1, (255,0,0), 1)
+        # cv2.imshow("Green Mask", mask_with_color)
+
         for keypoint in keypoints:
-            x, y = keypoint.pt  
-            if y > center_y:
-                center_y = y
-                center_x = x
+            for contour in color_contours:
+                if cv2.pointPolygonTest(contour, keypoint.pt, False) > 0:
+                    center = (int(keypoint.pt[0]), int(keypoint.pt[1]))
+                    # cv2.circle(frame, center, 10, (255, 0, 255), 2)
+                    # if self.previous_position:
+                        # cv2.line(self.trail, self.previous_position, center,
+                        #                 (255, 255, 255), 2)
+                        # cv2.add(self.trail, frame, frame)
+                    self.previous_position = center
+                    self.centers.append([center[0], center[1]])
+                    print(self.color, ": ", self.centers)
+                    return
+        
+        # max_y = 0
+        # center_x = 0
+        # center_y = 0
+        # for keypoint in keypoints:
+        #     x, y = keypoint.pt  
+        #     if y > center_y:
+        #         center_y = y
+        #         center_x = x
 
-        if center_y > self.cam_height/3:
-            center = int(center_x), int(center_y)
-            print(center)
-            if self.previous_position:
-                cv2.line(self.trail, self.previous_position, center,
-                                (255, 255, 255), 2)
+        # if center_y > self.cam_height/3:
+        #     center = int(center_x), int(center_y)
+        #     print(center)
+        #     if self.previous_position:
+        #         cv2.line(self.trail, self.previous_position, center,
+        #                         (255, 255, 255), 2)
 
-            cv2.add(self.trail, frame, frame)
-            self.previous_position = center
-            self.centers.append([center[0], center[1]])
-
-        print(self.centers)
-        # if (len(self.centers) >= 25):
-            # self.clear_trail()
+        #     cv2.add(self.trail, frame, frame)
+        #     self.previous_position = center
+            # self.centers.append([center[0], center[1]])
 
     def detect(self, frame):
-        # gray_img = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        # hsv_img = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         hls_img = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
-
-        # gray_mask = cv2.adaptiveThreshold(gray_img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C
-        #                                      , cv2.THRESH_BINARY, 5, 2)
-        # gray_mask = cv2.threshold(gray_img, 200, 255, cv2.THRESH_BINARY)
-        # blurred = cv2.GaussianBlur(gray_img, (11, 11), 0)
-        # _, thres = cv2.threshold(blurred, 50, 255, cv2.THRESH_BINARY)
         
-        # Threshold ranges of HSV components
-        # hsv_thres = cv2.inRange(hsv_img, (self.hue_min, self.sat_min, self.val_min), 
-        #                             (self.hue_max, self.sat_max, self.val_max))
-        # if self.color == "red":
-        #     tmp = cv2.inRange(hsv_img, (170, self.sat_min, self.val_min),
-        #                       (180, self.sat_max, self.val_max))
-        #     hsv_thres = cv2.bitwise_or(hsv_thres, tmp)
-        hls_thres = cv2.inRange(hls_img, (0, 250, 0), 
-                                    (255, 255, 255))
-        if self.color == "red":
-            tmp = cv2.inRange(hls_img, (170, 200, self.sat_min),
-                              (180, 255, self.sat_max))
-            hls_thres = cv2.bitwise_or(hls_thres, tmp)
+        # "red":{"hue_min":0, "hue_max":20, "l_min":60, 
+        #            "l_max":180, "sat_min":127, "sat_max":255}, 
+        #     "green":{"hue_min":40, "hue_max":80, "l_min":60, 
+        #            "l_max":180, "sat_min":127, "sat_max":255}} 
+        hls_thres = cv2.inRange(hls_img, (0, 200, 0), (180, 255, 255))
+        if self.color == "green":
+            hls_thres_with_color = cv2.inRange(hls_img, (40, 60, 127), (80, 180, 255))
+        # hls_thres_with_color = cv2.morphologyEx(hls_thres_with_color, cv2.MORPH_DILATE, np.ones((7,7),np.uint8))
+        elif self.color == "red":
+            hls_thres_with_color = cv2.inRange(hls_img, (0, 150, 127), (15, 180, 255))
+            tmp = cv2.inRange(hls_img, (165, 150, 127), (180, 180, 255))
+            hls_thres_with_color = cv2.bitwise_or(hls_thres_with_color, tmp)
+        hls_thres_with_color = cv2.morphologyEx(hls_thres_with_color, cv2.MORPH_DILATE, np.ones((7,7),np.uint8))
         
-        # thres = cv2.bitwise_and(gray_mask, hsv_thres)
-        # self.track(frame, hls_thres)
-        self.find_blob(frame, hls_thres)
-        # if self.previous_position:
-            # print(hls_img[self.previous_position[1], self.previous_position[0]])
-
-        # return hsv_thres
+        self.find_blob(frame, hls_thres, hls_thres_with_color)
+    
         return hls_thres
     
     def check_activate(self):
@@ -214,52 +167,27 @@ class LaserTracker():
         # if right > 480 and left < 160:
         #     return True
         # return False
+
+        if self.curr_len != len(self.centers):
+            self.last_time = time.time()
+
+        self.curr_len = len(self.centers)
+
+        if time.time() >= self.last_time+5.0 and self.curr_len==self.prev_len:
+            self.centers.clear()
+            self.prev_len = 0
+            self.curr_len = 0
+
+        self.prev_len = len(self.centers)
+
         if (len(self.centers) < 6):
             return False
-
+        
         left = self.centers[0][0]
         right = self.centers[-1][0]
         if right > 500 and left < 140:
             return True
         return False
-    
-    def check_scattered_laser(self,mask):
-        """Check the scattered laser points"""
-        detector = cv2.SimpleBlobDetector.create()
-        params = detector.getParams()
-
-        # Filter by color (white)
-        params.filterByColor = False
-        # params.blobColor = 255
-
-        # Set Circularity filtering parameters 
-        params.filterByCircularity = True 
-        params.minCircularity = 0.6
-        
-        # Set Convexity filtering parameters 
-        params.filterByConvexity = True
-        params.minConvexity = 0.2
-
-        # Set inertia filtering parameters 
-        params.filterByInertia = True
-        params.minInertiaRatio = 0.01
-
-        # Filter by Area
-        params.filterByArea = False
-        params.maxArea = 200
-
-        detector.setParams(params)
-        
-        # Detect blobs 
-        keypoints = detector.detect(mask)
-        
-        print(len(keypoints))
-        if (len(keypoints) >= 5):
-            return 1
-        return 0
-        # center_x = 0
-        # center_y = 0
-        # for keypoint in keypoints:
 
     def get_target_pos(self, depth_frame, depth_scale, depth_intrin):
         """Identify the target position when selected"""
@@ -281,69 +209,83 @@ class States(Enum):
     SELECTED = 2
     NAVIGATING = 3
     ARRIVE = 4   
+    FAILED = 5
 
 class Tasks(Enum):
     """enums for tasks"""
     SPIN = 1
     DRIVE_SQUARE = 2
 
-class Runner():
-    def __init__(self, display=False):
-        self.display = display
+class Runner(Node):
+    def __init__(self, recv_port, send_port, my_ip, other_ip):
+        super().__init__("runner") #, namespace="ff1")
         self.cam_width = 640
         self.cam_height = 480
-        self.hsv_thres = {
-            "red":{"hue_min":0, "hue_max":10, "sat_min":100, 
-                   "sat_max":255, "val_min":200, "val_max":256}, 
-            "green":{"hue_min":50, "hue_max":70, "sat_min":100, 
-                   "sat_max":255, "val_min":200, "val_max":256}} # 100, 255
-        self.red_tracker = LaserTracker(self.hsv_thres["red"], "red", self.cam_width, 
-                                        self.cam_height)
-        self.green_tracker = LaserTracker(self.hsv_thres["green"], "green", self.cam_width,
-                                          self.cam_height, 0, self.cam_height+10)
+        self.hls_thres = {
+            "red":{"hue_min":0, "hue_max":20, "l_min":60, 
+                   "l_max":180, "sat_min":127, "sat_max":255}, 
+            "green":{"hue_min":40, "hue_max":80, "l_min":60, 
+                   "l_max":180, "sat_min":127, "sat_max":255}} 
+        self.red_tracker = LaserTracker(self.hls_thres["red"], "red")
+        self.green_tracker = LaserTracker(self.hls_thres["green"], "green")
 
         self.pipeline = None
         self.config = None
         self.align = None
         self.depth_scale = None
         # self.depth_intrin = None
+        self.setup_camera()
 
         self.state = States.IDLE #States.IDLE
         self.task = None
-        # self.offset = [0.0, 0.0]
+        self.offset = [0.0, 0.2] # x,y
         self.cur_pose = [0.0, 0.0, 0.0]
-        self.target_pos_x = 0.0
-        self.target_pos_y = 0.0
+        self.cur_x = 0.0 
+        self.cur_y = 0.0
+        self.cur_yaw = 0.0
+        self.rob_frame_target_position = None #[0.0, 0.0]
         self.laser_detected = False
+        self.cur_color = None
 
         self.navigator = BasicNavigator()
+        self.init_navigator()
         
-        # self.target_pos = Point()
-        # self.current_pos = Point()
+        # self.tf_node = Node("map_base_link_frame_listener")
+        self.target_frame = self.declare_parameter(
+            "target_frame", "base_link").get_parameter_value().string_value
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=True)
+
+        self.from_frame_rel = self.target_frame
+        self.to_frame_rel = "map"
         
-        self.pub_node = Node("Robot1_publisher")
-        self.sub_node = Node("Robot1_subscriber")
-        self.target_pos_publisher = self.pub_node.create_publisher(
-            PoseStamped,
-            "Robot1_target_pos",
-            10
-        )
-        self.target_pos_subscriber = self.sub_node.create_subscription(
-            PoseStamped, 
-            "Robot2_target_pos",
+        # self.start()
+        # self.tf_timer = self.create_timer(0.5, self.on_tf_timer)
+        self.timer = self.create_timer(1.0, self.on_timer)
+        
+        self.target_pos_publisher = self.create_publisher(
+            Point,
+            "ff0/Robot0_target_pos",
+            10)
+        self.target_pos_subscriber = self.create_subscription(
+            Point, 
+            "ff1/Robot1_target_pos",
             self.sub_callback,
             10)
+        
+        # self.my_socket = MySocketClass(recv_port, send_port, my_ip, other_ip)
 
-        # # self.pid = PID(1, 0.1, 0.05, setpoint=1)
-        # self.pid = MYPID(1.0, 0.1, 0.03)
-
-    def sub_callback(self, msg:PoseStamped):
+    def sub_callback(self, msg:Point):
         # subscribe target position from other selected robots
-        if not self.laser_detected:
-            self.target_pos_x = msg.pose.position.x
-            self.target_pos_y = msg.pose.position.y
+        print(msg.x, msg.y)
+        if not self.laser_detected and self.state == States.SELECTED:
+            self.target_pos_x = msg.x + self.offset[0]
+            self.target_pos_y = msg.y + self.offset[1]
+            self.laser_detected = True
+            print("receive target position")
 
     def setup_camera(self):
+        print("start setup camera")
         self.pipeline = rs.pipeline()
         self.config = rs.config()
         pipeline_wrapper = rs.pipeline_wrapper(self.pipeline)
@@ -358,19 +300,17 @@ class Runner():
         self.align = rs.align(rs.stream.color)
 
         print("Camera setup succeed.")
-        
-    def handle_quit(self, delay=10):
-        """Quit the program if the user presses "Esc" or "q"."""
-        key = cv2.waitKey(delay)
-        c = chr(key & 255)
-        if c in ['c', 'C']:
-            self.red_tracker.clear_trail()
-            self.green_tracker.clear_trail()
 
-        if c in ['q', 'Q', chr(27)]:
-            cv2.destroyAllWindows()
-            self.pipeline.stop()
-            sys.exit(0)
+    def init_navigator(self):
+        # Set nav2 initial pose
+        initial_pose = PoseStamped()
+        initial_pose.header.frame_id = 'map'
+        initial_pose.header.stamp = self.navigator.get_clock().now().to_msg()
+        initial_pose.pose.position.x = 0.0
+        initial_pose.pose.position.y = 0.0
+        initial_pose.pose.orientation.z = 0.0
+        initial_pose.pose.orientation.w = 1.0
+        self.navigator.setInitialPose(initial_pose)
     
     def handle_idle(self):
         while self.state == States.IDLE:
@@ -381,19 +321,27 @@ class Runner():
 
             color_image = np.asanyarray(color_frame.get_data())
 
-            # red_bin = self.red_tracker.detect(color_image)
+            red_bin = self.red_tracker.detect(color_image)
             green_bin = self.green_tracker.detect(color_image)
-            if self.display:
-                # self.red_tracker.display(red_bin, color_image)
-                self.green_tracker.display(green_bin, color_image)
-                self.handle_quit()
 
-            # if self.red_tracker.check_activate():
-            if self.green_tracker.check_activate():
+            if self.red_tracker.check_activate():
+                print("red activate")
                 self.state = States.SELECTED
+                self.task = Tasks.SPIN
+                self.cur_color = "red"
+                break
+
+            if self.green_tracker.check_activate():
+                print("green activate")
+                self.state = States.SELECTED
+                self.cur_color = "green"
 
     def handle_selected(self):
         while self.state == States.SELECTED:
+            if self.laser_detected:
+                self.state = States.NAVIGATING
+                break
+
             frames = self.pipeline.wait_for_frames()
             aligned_frames = self.align.process(frames)
             depth_frame = aligned_frames.get_depth_frame()
@@ -404,58 +352,91 @@ class Runner():
 
             depth_image = np.asanyarray(depth_frame.get_data())
             color_image = np.asanyarray(color_frame.get_data())
-            depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
-            images = np.hstack((color_image, depth_colormap))
-
-            # red_bin = self.red_tracker.detect(color_image)
-            green_bin = self.green_tracker.detect(color_image)
-            # print(self.green_tracker.centers)
-            # red_pos = self.red_tracker.get_target_pos(depth_image, self.depth_scale)
-            # print(red_pos)
-            # if red_pos:
-                # self.state = States.NAVIGATING
-                # TODO: control ...
-            
+            # depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+            # images = np.hstack((color_image, depth_colormap))
             depth_intrin = depth_frame.profile.as_video_stream_profile().intrinsics
-            green_pos = self.green_tracker.get_target_pos(depth_image, self.depth_scale, depth_intrin)
-            print(green_pos)
-            if self.display:
-                # self.red_tracker.display(red_bin, images)
-                self.green_tracker.display(green_bin, images)
-                self.handle_quit()
 
-            if (green_pos):
+            red_bin = self.red_tracker.detect(color_image)
+            red_pos = self.red_tracker.get_target_pos(depth_image, self.depth_scale, depth_intrin)
+            print(red_pos)
+            if self.cur_color == "red" and red_pos:
                 self.laser_detected = True
                 self.state = States.NAVIGATING
-                # TODO: transform the target pos to world frame
-                # self.target_pos_x = green_pos[0] + self.cur_pose[0]
-                self.target_pos_x = green_pos[0]*np.cos(self.cur_pose[2]) \
-                    - green_pos[1]*np.sin(self.cur_pose[2]) + self.cur_pose[0]
-                # self.target_pos_y = green_pos[1] + self.cur_pose[1]
-                self.target_pos_y = green_pos[0]*np.sin(self.cur_pose[2]) \
-                    + green_pos[1]*np.cos(self.cur_pose[2]) + self.cur_pose[1]
-                    
-    def control_motion(self, px, py, oz=0.0):
+                self.target_pos_x = np.cos(self.cur_pose[2])*red_pos[0]\
+                    - np.sin(self.cur_pose[2])*red_pos[1] + self.cur_pose[0]
+                self.target_pos_y = np.sin(self.cur_pose[2])*red_pos[0]\
+                    + np.cos(self.cur_pose[2])*red_pos[1] + self.cur_pose[1]
+                self.rob_frame_target_position = red_pos
+
+                break
+
+            green_bin = self.green_tracker.detect(color_image)
+            green_pos = self.green_tracker.get_target_pos(depth_image, self.depth_scale, depth_intrin)
+            print(green_pos)
+
+            if self.cur_color == "green" and green_pos:
+                self.laser_detected = True
+                self.state = States.NAVIGATING
+                # self.target_pos_x = green_pos[0]
+                self.target_pos_x = np.cos(self.cur_pose[2])*green_pos[0]\
+                    - np.sin(self.cur_pose[2])*green_pos[1] + self.cur_pose[0]
+                # self.target_pos_y = green_pos[1]
+                self.target_pos_y = np.sin(self.cur_pose[2])*green_pos[0]\
+                    + np.cos(self.cur_pose[2])*green_pos[1] + self.cur_pose[1]
+                self.rob_frame_target_position = green_pos
+
+                break
+                # dat = str(self.target_pos_x) + " " + str(self.target_pos_y)
+                # self.my_socket.send_data(dat)
+
+    def nav(self, px, py, oz):
         goal_pose = PoseStamped()
         goal_pose.header.frame_id = 'map'
         goal_pose.header.stamp = self.navigator.get_clock().now().to_msg()
-        goal_pose.pose.position.x = px
-        goal_pose.pose.position.y = py
+        goal_pose.pose.position.x = px #+ 0.08 * np.cos(self.cur_pose[2])
+        goal_pose.pose.position.y = py #+ 0.08 * np.sin(self.cur_pose[2])
+        print("target yaw: ", oz)
         goal_pose.pose.orientation.z = oz
         goal_pose.pose.orientation.w = 1.0
-        
+
         # publish goal pose in this robot's world frame
-        for _ in range(10):
-            self.target_pos_publisher.publish(goal_pose)
-            self.pub_node.get_logger().info("publishing goal pose")
-        self.navigator.goToPose(goal_pose)
+        if self.rob_frame_target_position:
+            print("publishing goal position")
+            pub_goal = Point()
+            pub_goal.x = px
+            pub_goal.y = py
+            # for _ in range(10):
+            self.target_pos_publisher.publish(pub_goal)
+            
+        self.navigator.spin(oz)
         while not self.navigator.isTaskComplete():
             continue
+        self.navigator.goToPose(goal_pose)
+        while not self.navigator.isTaskComplete():
+            feedback = self.navigator.getFeedback()
+            if Duration.from_msg(feedback.navigation_time) > Duration(seconds=15.0):
+                self.navigator.cancelTask()
+                self.state = States.FAILED
+                return
         
         result = self.navigator.getResult()
         if result == TaskResult.SUCCEEDED:
             print('Goal succeeded!')
-            self.cur_pose = [self.target_pos_x, self.target_pos_y, 0.0]
+            # TODO: listen from tf2_ros transform_listener
+            # self.tf_buffer.wait_for_transform_async()
+            try: 
+                self.on_tf_timer() 
+                # self.cur_pose = [t.transform.translation.x, 
+                #                 t.transform.translation.y, 
+                #                 t.transform.rotation.z]
+            except TransformException as ex:
+                self.get_logger().info(
+                    f'Could not transform {self.to_frame_rel} to {self.from_frame_rel}: {ex}')
+            else:
+                # print("lookup_transform failed")
+                pass
+            self.cur_pose = [self.cur_x, self.cur_y, self.cur_yaw]
+            print("current pose: ", self.cur_pose)
             return 1
         elif result == TaskResult.CANCELED:
             print('Goal was canceled!')
@@ -463,133 +444,108 @@ class Runner():
             print('Goal failed!')
         else:
             print('Goal has an invalid return status!')
+        self.state = States.FAILED
         return 0
 
     def handle_navigate(self):
         while self.state == States.NAVIGATING:
-            if self.control_motion(self.target_pos_x, self.target_pos_y):
+            if self.rob_frame_target_position:
+                target_orientation = self.cur_pose[2] + \
+                    np.arctan2(self.rob_frame_target_position[1], self.rob_frame_target_position[0])                            
+                # if self.nav(self.target_pos_x, self.target_pos_y, target_orientation):
+                #     self.state = States.ARRIVE
+            else:
+                print("nav pose received from communication")
+                # TODO: check correctness
+                target_orientation = -np.arctan2(self.target_pos_y - self.cur_pose[1], 
+                                                self.target_pos_x - self.cur_pose[0])
+                
+            if self.nav(self.target_pos_x, self.target_pos_y, target_orientation):
                 self.state = States.ARRIVE
-                break
+                
             self.laser_detected = False
-            # frames = self.pipeline.wait_for_frames()
-            # aligned_frames = self.align.process(frames)
-            # depth_frame = aligned_frames.get_depth_frame()
-            # color_frame = frames.get_color_frame()
-
-            # if not depth_frame or not color_frame:
-            #     continue
-
-            # depth_image = np.asanyarray(depth_frame.get_data())
-            # color_image = np.asanyarray(color_frame.get_data())
-            # depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
-            # images = np.hstack((color_image, depth_colormap))
-
-            # # red_bin = self.red_tracker.detect(color_image)
-            # green_bin = self.green_tracker.detect(color_image)
-            # # print(self.green_tracker.centers)
-            # # red_pos = self.red_tracker.get_target_pos(depth_image, self.depth_scale)
-            # # print(red_pos)
-            # # if red_pos:
-            #     # self.state = States.NAVIGATING
-            #     # TODO: control ...
-            
-            # depth_intrin = depth_frame.profile.as_video_stream_profile().intrinsics
-            # green_pos = self.green_tracker.get_target_pos(depth_image, self.depth_scale, depth_intrin)
-            # print(green_pos)
-            # if self.display:
-            #     # self.red_tracker.display(red_bin, images)
-            #     self.green_tracker.display(green_bin, images)
-            #     self.handle_quit()
-
-            # if (green_pos):
-            #     self.target_pos = green_pos
 
     def handle_arrive(self):
         # TODO: control the bot to do something
         while self.state == States.ARRIVE:
-            start = time.time()
-            while (start+5.0) > time.time():
-                frames = self.pipeline.wait_for_frames()
-                color_frame = frames.get_color_frame()
-                if not color_frame:
-                    continue
-
-                color_image = np.asanyarray(color_frame.get_data())
-
-                green_bin = self.green_tracker.detect(color_image)
-                if self.display:
-                    self.green_tracker.display(green_bin, color_image)
-                    self.handle_quit()
-                
-                # if self.green_tracker.check_scattered_laser(green_bin):
-                    # self.task = Tasks.SPIN
-
             if not self.task:
                 self.state = States.IDLE
                 break
 
             if self.task == Tasks.SPIN:
-                if self.control_motion(self.target_pos_x, self.target_pos_y, 1.0):
-                    pass
-                if self.control_motion(self.target_pos_x, self.target_pos_y, 1.0):
-                    pass
+                self.navigator.spin()
+                self.navigator.spin()
+                self.cur_pose[2] += 3.14
+                # if self.nav(self.cur_pose[0], self.cur_pose[1], self.cur_pose[2]):
+                #     pass
+
                 print("complete spin task")
             elif self.task == Tasks.DRIVE_SQUARE:
                 pass
             self.task = None
             self.state = States.IDLE
-            
-    def start(self):
-        rclpy.spin(self.pub_node)
-        rclpy.spin(self.sub_node)
+            self.cur_color = None
+            self.rob_frame_target_position = None
 
-        if self.display:
-            print("Display enabled")
-        if self.display:
-            # self.red_tracker.setup_windows()
-            self.green_tracker.setup_windows()
-        self.setup_camera()
-        # TODO: initialize current_pos
-        # self.current_pos = [0, 0]
+    def handle_failed(self):
+        """reset pose when failed"""
+        try:   
+            self.on_tf_timer() 
+        except TransformException as ex:
+            self.get_logger().info(
+                f'Could not transform {self.to_frame_rel} to {self.from_frame_rel}: {ex}')
+        else:
+            # print("lookup transform failed")
+            pass
+        self.cur_pose = [self.cur_x, self.cur_y, self.cur_yaw]
+        
+        print("current pose: ", self.cur_pose)
+        self.state = States.IDLE
+        self.task = None
+        self.cur_color = None
+        self.rob_frame_target_position = None
 
-        # Set nav2 initial pose
-        initial_pose = PoseStamped()
-        initial_pose.header.frame_id = 'map'
-        initial_pose.header.stamp = self.navigator.get_clock().now().to_msg()
-        initial_pose.pose.position.x = 0.0
-        initial_pose.pose.position.y = 0.0
-        initial_pose.pose.orientation.z = 0.0
-        initial_pose.pose.orientation.w = 1.0
-        self.navigator.setInitialPose(initial_pose)
+    def on_tf_timer(self):
+        t = self.tf_buffer.lookup_transform(self.to_frame_rel,
+                                            self.from_frame_rel,
+                                            rclpy.time.Time(nanoseconds=0))
+        self.cur_x = t.transform.translation.x
+        self.cur_y = t.transform.translation.y
+        self.cur_yaw = t.transform.rotation.z
+        self.cur_timestamp = t.header.stamp
+        print("transform: ", self.cur_x, " ", self.cur_y, " ", self.cur_yaw, " ",
+               self.cur_timestamp)
 
-        # self.navigator.waitUntilNav2Active()
-        print("wait for nav2")
-        time.sleep(5.0)
-
-        while True:
-            if self.state == States.IDLE:
-                print("idel")
-                self.handle_idle()
-            elif self.state == States.SELECTED:
-                print("selected")
-                self.handle_selected()
-            elif self.state == States.NAVIGATING:
-                print("navigating")
-                self.handle_navigate()
-            elif self.state == States.ARRIVE:
-                print("arrived    may perform some tasks...")
-                self.handle_arrive()
-
-            self.red_tracker.clear_trail()
-            self.green_tracker.clear_trail()
-            print("changing state")
-            time.sleep(1)
-
-        scv2.destroyAllWindows()
-        self.pipeline.stop()
-        rclpy.shutdown()
-        # navigator.lifecycleShutdown()
-        sys.exit(0)
+    def on_timer(self):
+        # while True:
+        tmp = Point()
+        tmp.x = 467
+        tmp.y = 467
+        self.target_pos_publisher.publish(tmp)
+        if self.state == States.IDLE:
+            print("idel")
+            self.handle_idle()
+        elif self.state == States.SELECTED:
+            print("selected")
+            self.handle_selected()
+        elif self.state == States.NAVIGATING:
+            print("navigating")
+            self.handle_navigate()
+        elif self.state == States.ARRIVE:
+            print("arrived    may perform some tasks...")
+            self.handle_arrive()
+        elif self.state == States.FAILED:
+            print("failed")
+            self.handle_failed()
+        
+        if self.cur_pose[2] >= 6.28:
+            self.cur_pose[2] -= 6.28
+        if self.cur_pose[2] < 0:
+            self.cur_pose[2] += 6.28
+        self.red_tracker.clear_trail()
+        self.green_tracker.clear_trail()
+        print("changing state")
+        # time.sleep(1)
 
 def main():
     """run with 'python3 runner.py -d' to show video"""
@@ -601,6 +557,7 @@ def main():
     # params = parser.parse_args()
 
     # runner = Runner(params.display)
-    runner = Runner()
-    runner.start()
-    
+    runner = Runner(5001, 5005, "35.3.33.37", "35.3.202.217")
+    # runner.start()
+    rclpy.spin(runner)
+    rclpy.shutdown()
