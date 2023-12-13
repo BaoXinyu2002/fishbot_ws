@@ -11,7 +11,7 @@ def generate_launch_description():
         'fishbot_navigation2')
     nav2_bringup_dir = get_package_share_directory('nav2_bringup')
     rviz_config_dir = os.path.join(
-        nav2_bringup_dir, 'rviz', 'nav2_default_view.rviz')
+        nav2_bringup_dir, 'rviz', 'nav2_namespaced_view.rviz')
     
     # 创建 Launch 配置
     use_sim_time = launch.substitutions.LaunchConfiguration(
@@ -36,6 +36,8 @@ def generate_launch_description():
             # 使用 Launch 参数替换原有参数
             launch_arguments={
                 'map': map_yaml_path,
+                'namespace': '/ff1',
+                'use_namespace': 'true',
                 'use_sim_time': use_sim_time,
                 'params_file': nav2_param_path}.items(),
         ),
@@ -43,6 +45,11 @@ def generate_launch_description():
             package='rviz2',
             executable='rviz2',
             name='rviz2',
+            namespace='/ff1',
+            remappings=[
+                ('/tf', '/ff1/tf'),
+                ('/tf_static', '/ff1/tf_static')
+            ],
             arguments=['-d', rviz_config_dir],
             parameters=[{'use_sim_time': use_sim_time}],
             output='screen'),

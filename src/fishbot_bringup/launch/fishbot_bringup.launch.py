@@ -12,10 +12,16 @@ def generate_launch_description():
     ld = LaunchDescription()
     pkg_share = FindPackageShare(package=package_name).find(package_name)
     urdf_model_path = os.path.join(pkg_share, f'urdf/{urdf_name}')
+    print(urdf_model_path)
 
     robot_state_publisher_node = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
+        namespace='ff1',
+        remappings=[
+            ('/tf', '/ff1/tf'),
+            ('/tf_static', '/ff1/tf_static'),
+        ],
         arguments=[urdf_model_path]
     )
 
@@ -23,6 +29,11 @@ def generate_launch_description():
         package='joint_state_publisher',
         executable='joint_state_publisher',
         name='joint_state_publisher',
+        namespace='ff1',
+        remappings=[
+            ('/tf', '/ff1/tf'),
+            ('/tf_static', '/ff1/tf_static'),
+        ],
         arguments=[urdf_model_path],
         output='screen',
     )
@@ -31,6 +42,11 @@ def generate_launch_description():
         package='fishbot_bringup',
         executable='fishbot_bringup',
         name='fishbot_bringup',
+        namespace='ff1',
+        remappings=[
+            ('/tf', '/ff1/tf'),
+            ('/tf_static', '/ff1/tf_static'),
+        ],
         output='screen',
     )
 

@@ -4,12 +4,11 @@ from rclpy.node import Node
 from rclpy.duration import Duration
 # from geometry_msgs.msg import Twist, Pose, Point
 # from nav_msgs.msg import Odometry
-from geometry_msgs.msg import PoseStamped, Point
+from geometry_msgs.msg import PoseStamped, PointStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
-
 from enum import Enum
 
 import sys
@@ -238,7 +237,11 @@ class Runner(Node):
 
         self.state = States.IDLE #States.IDLE
         self.task = None
-        self.offset = [0.0, 0.2] # x,y
+        self.name = 'ff1'
+        self.offset = {
+            'ff0': [0.0, 0.0],
+            'ff1': [0.0, 0.0]
+        }
         self.cur_pose = [0.0, 0.0, 0.0]
         self.cur_x = 0.0 
         self.cur_y = 0.0
@@ -261,28 +264,29 @@ class Runner(Node):
         
         # self.start()
         # self.tf_timer = self.create_timer(0.5, self.on_tf_timer)
-        self.timer = self.create_timer(1.0, self.on_timer)
+        self.timer = self.create_timer(0.1, self.on_timer)
         
         self.target_pos_publisher = self.create_publisher(
-            Point,
-            "ff0/Robot0_target_pos",
+            PointStamped,
+            "/target_pos",
             10)
         self.target_pos_subscriber = self.create_subscription(
-            Point, 
-            "ff1/Robot1_target_pos",
+            PointStamped, 
+            "/target_pos",
             self.sub_callback,
             10)
         
         # self.my_socket = MySocketClass(recv_port, send_port, my_ip, other_ip)
 
-    def sub_callback(self, msg:Point):
+    def sub_callback(self, msg:PointStamped):
         # subscribe target position from other selected robots
-        print(msg.x, msg.y)
-        if not self.laser_detected and self.state == States.SELECTED:
-            self.target_pos_x = msg.x + self.offset[0]
-            self.target_pos_y = msg.y + self.offset[1]
+        # print(msg.point.x, msg.point.y)
+        if not self.laser_detected and self.state == States.SELECTED and msg.header.frame_id != self.name:
+            self.target_pos_x = -(msg.point.x - self.offset[msg.header.frame_id][0] + self.offset[self.name][0])
+            self.target_pos_y = -(msg.point.y - self.offset[msg.header.frame_id][1] + self.offset[self.name][1])
             self.laser_detected = True
             print("receive target position")
+            time.sleep(5.0)
 
     def setup_camera(self):
         print("start setup camera")
@@ -329,12 +333,17 @@ class Runner(Node):
                 self.state = States.SELECTED
                 self.task = Tasks.SPIN
                 self.cur_color = "red"
+
+                self.change_state()
                 break
 
             if self.green_tracker.check_activate():
                 print("green activate")
                 self.state = States.SELECTED
                 self.cur_color = "green"
+                self.change_state()
+            
+            break
 
     def handle_selected(self):
         while self.state == States.SELECTED:
@@ -367,7 +376,13 @@ class Runner(Node):
                 self.target_pos_y = np.sin(self.cur_pose[2])*red_pos[0]\
                     + np.cos(self.cur_pose[2])*red_pos[1] + self.cur_pose[1]
                 self.rob_frame_target_position = red_pos
-
+                pub_goal = PointStamped()
+                pub_goal.header.frame_id = self.name
+                pub_goal.point.x = self.target_pos_x
+                pub_goal.point.y = self.target_pos_y
+                self.target_pos_publisher.publish(pub_goal)
+                print("publish")
+                self.change_state()
                 break
 
             green_bin = self.green_tracker.detect(color_image)
@@ -384,10 +399,18 @@ class Runner(Node):
                 self.target_pos_y = np.sin(self.cur_pose[2])*green_pos[0]\
                     + np.cos(self.cur_pose[2])*green_pos[1] + self.cur_pose[1]
                 self.rob_frame_target_position = green_pos
+                pub_goal = PointStamped()
+                pub_goal.header.frame_id = self.name
+                pub_goal.point.x = self.target_pos_x
+                pub_goal.point.y = self.target_pos_y
+                self.target_pos_publisher.publish(pub_goal)
+                print("publish")
+                self.change_state()
 
                 break
                 # dat = str(self.target_pos_x) + " " + str(self.target_pos_y)
                 # self.my_socket.send_data(dat)
+            break
 
     def nav(self, px, py, oz):
         goal_pose = PoseStamped()
@@ -400,17 +423,19 @@ class Runner(Node):
         goal_pose.pose.orientation.w = 1.0
 
         # publish goal pose in this robot's world frame
-        if self.rob_frame_target_position:
-            print("publishing goal position")
-            pub_goal = Point()
-            pub_goal.x = px
-            pub_goal.y = py
-            # for _ in range(10):
-            self.target_pos_publisher.publish(pub_goal)
-            
-        self.navigator.spin(oz)
-        while not self.navigator.isTaskComplete():
-            continue
+        # if self.rob_frame_target_position:
+        #     print("publishing goal position")
+        #     pub_goal = PointStamped()
+        #     pub_goal.point.x = px
+        #     pub_goal.point.y = py
+        #     pub_goal.header.frame_id='ff1'
+        #     # for _ in range(10):
+        #     self.target_pos_publisher.publish(pub_goal)
+        spin_angle=min(abs(oz-self.cur_pose[2]),2*np.pi-abs(oz-self.cur_pose[2]))
+        if spin_angle>0.5:
+            self.navigator.spin((oz-self.cur_pose[2]+np.pi)%(2%np.pi)-np.pi)
+            while not self.navigator.isTaskComplete():
+                continue
         self.navigator.goToPose(goal_pose)
         while not self.navigator.isTaskComplete():
             feedback = self.navigator.getFeedback()
@@ -457,19 +482,22 @@ class Runner(Node):
             else:
                 print("nav pose received from communication")
                 # TODO: check correctness
-                target_orientation = -np.arctan2(self.target_pos_y - self.cur_pose[1], 
+                target_orientation = np.arctan2(self.target_pos_y - self.cur_pose[1], 
                                                 self.target_pos_x - self.cur_pose[0])
                 
             if self.nav(self.target_pos_x, self.target_pos_y, target_orientation):
                 self.state = States.ARRIVE
+                self.change_state()
                 
             self.laser_detected = False
+            break
 
     def handle_arrive(self):
         # TODO: control the bot to do something
         while self.state == States.ARRIVE:
             if not self.task:
                 self.state = States.IDLE
+                self.change_state()
                 break
 
             if self.task == Tasks.SPIN:
@@ -486,6 +514,7 @@ class Runner(Node):
             self.state = States.IDLE
             self.cur_color = None
             self.rob_frame_target_position = None
+            break
 
     def handle_failed(self):
         """reset pose when failed"""
@@ -504,6 +533,23 @@ class Runner(Node):
         self.task = None
         self.cur_color = None
         self.rob_frame_target_position = None
+        self.change_state()
+
+    def quaternion_to_yaw(self,x, y, z, w):
+        """
+        Convert a quaternion into yaw angle.
+
+        Parameters:
+        x, y, z, w: Components of the quaternion.
+
+        Returns:
+        Yaw angle in radians.
+        """
+        siny_cosp = 2 * (w * z + x * y)
+        cosy_cosp = 1 - 2 * (y * y + z * z)
+        yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+        return yaw
 
     def on_tf_timer(self):
         t = self.tf_buffer.lookup_transform(self.to_frame_rel,
@@ -511,17 +557,23 @@ class Runner(Node):
                                             rclpy.time.Time(nanoseconds=0))
         self.cur_x = t.transform.translation.x
         self.cur_y = t.transform.translation.y
-        self.cur_yaw = t.transform.rotation.z
+        self.cur_yaw = self.quaternion_to_yaw(t.transform.rotation.x, t.transform.rotation.y, t.transform.rotation.z, t.transform.rotation.w)
         self.cur_timestamp = t.header.stamp
         print("transform: ", self.cur_x, " ", self.cur_y, " ", self.cur_yaw, " ",
                self.cur_timestamp)
+    
+    def change_state(self):
+        if self.cur_pose[2] >= 6.28:
+            self.cur_pose[2] -= 6.28
+        if self.cur_pose[2] < 0:
+            self.cur_pose[2] += 6.28
+        self.red_tracker.clear_trail()
+        self.green_tracker.clear_trail()
+        print("changing state")
+        time.sleep(1)
 
     def on_timer(self):
         # while True:
-        tmp = Point()
-        tmp.x = 467
-        tmp.y = 467
-        self.target_pos_publisher.publish(tmp)
         if self.state == States.IDLE:
             print("idel")
             self.handle_idle()
@@ -537,15 +589,6 @@ class Runner(Node):
         elif self.state == States.FAILED:
             print("failed")
             self.handle_failed()
-        
-        if self.cur_pose[2] >= 6.28:
-            self.cur_pose[2] -= 6.28
-        if self.cur_pose[2] < 0:
-            self.cur_pose[2] += 6.28
-        self.red_tracker.clear_trail()
-        self.green_tracker.clear_trail()
-        print("changing state")
-        # time.sleep(1)
 
 def main():
     """run with 'python3 runner.py -d' to show video"""
@@ -559,5 +602,8 @@ def main():
     # runner = Runner(params.display)
     runner = Runner(5001, 5005, "35.3.33.37", "35.3.202.217")
     # runner.start()
-    rclpy.spin(runner)
+    try:
+        rclpy.spin(runner)
+    except KeyboardInterrupt:
+        pass
     rclpy.shutdown()

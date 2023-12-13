@@ -44,7 +44,7 @@ bt_navigator:
     use_sim_time: True
     global_frame: map
     robot_base_frame: base_link
-    odom_topic: /odom
+    odom_topic: /ff1/odom
     bt_loop_duration: 10
     default_server_timeout: 20
     # 'default_nav_through_poses_bt_xml' and 'default_nav_to_pose_bt_xml' are use defaults:
@@ -132,13 +132,46 @@ controller_server:
     #  yaw_goal_tolerance: 0.25
     #  stateful: True
     general_goal_checker:
-      stateful: True
+      stateful: False #True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
-      yaw_goal_tolerance: 0.25
+      xy_goal_tolerance: 0.25 #0.2
+      yaw_goal_tolerance: 0.25 #0.25
     # DWB parameters
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
+      # plugin: "dwb_core::DWBLocalPlanner"
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "dwb_core::DWBLocalPlanner"
+      # primary_controller: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      angular_dist_threshold: 1.57 #0.785
+      forward_sampling_distance: 0.5
+      rotate_to_heading_angular_vel: 0.4 #1.8
+      max_angular_accel: 3.2
+      simulate_ahead_time: 1.0
+      
+      # desired_linear_vel: 0.5
+      # lookahead_dist: 0.6
+      # min_lookahead_dist: 0.3
+      # max_lookahead_dist: 0.9
+      # lookahead_time: 1.5
+      # rotate_to_heading_angular_vel: 0.5 #1.8
+      # transform_tolerance: 0.1
+      # use_velocity_scaled_lookahead_dist: false
+      # min_approach_linear_velocity: 0.05
+      # approach_velocity_scaling_dist: 0.6
+      # use_collision_detection: true
+      # max_allowed_time_to_collision_up_to_carrot: 1.0
+      # use_regulated_linear_velocity_scaling: true
+      # use_fixed_curvature_lookahead: false
+      # curvature_lookahead_dist: 0.25
+      # use_cost_regulated_linear_velocity_scaling: false
+      # regulated_linear_scaling_min_radius: 0.9
+      # regulated_linear_scaling_min_speed: 0.25
+      # use_rotate_to_heading: true
+      # allow_reversing: false
+      # rotate_to_heading_min_angle: 0.1 #0.785
+      # max_angular_accel: 3.2
+      # max_robot_pose_search_dist: 10.0
+      
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
@@ -166,7 +199,7 @@ controller_server:
       xy_goal_tolerance: 0.25
       trans_stopped_velocity: 0.25
       short_circuit_trajectory_evaluation: True
-      stateful: True
+      stateful: False #True
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 0.02
       PathAlign.scale: 32.0
@@ -175,9 +208,9 @@ controller_server:
       GoalAlign.forward_point_distance: 0.1
       PathDist.scale: 32.0
       GoalDist.scale: 24.0
-      RotateToGoal.scale: 32.0
-      RotateToGoal.slowing_factor: 5.0
-      RotateToGoal.lookahead_time: -1.0
+      # RotateToGoal.scale: 32.0
+      # RotateToGoal.slowing_factor: 5.0
+      # RotateToGoal.lookahead_time: -1.0
 
 local_costmap:
   local_costmap:
@@ -208,7 +241,7 @@ local_costmap:
         mark_threshold: 0
         observation_sources: scan
         scan:
-          topic: /scan
+          topic: /ff1/scan
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -239,7 +272,7 @@ global_costmap:
         enabled: True
         observation_sources: scan
         scan:
-          topic: /scan
+          topic: /ff1/scan
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -254,7 +287,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.03
+        inflation_radius: 0.1 # 0.03
       always_send_full_costmap: True
 
 map_server:
